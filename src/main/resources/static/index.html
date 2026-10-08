@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Data Importer</title>
+    <!-- Everything is local on purpose: step 2 runs on a VPN without internet, so nothing may come from a CDN. -->
+    <link rel="stylesheet" href="/css/app.css">
+    <script>
+        // Apply the saved theme before the page is drawn, so it never flashes in the wrong colours.
+        (function () {
+            var theme;
+            try { theme = localStorage.getItem('dataImporter.theme'); } catch (e) { /* storage blocked */ }
+            if (!theme) {
+                theme = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+            }
+            document.documentElement.setAttribute('data-theme', theme);
+        })();
+    </script>
+</head>
+<body>
+
+<header class="topbar">
+    <div class="topbar-inner">
+        <div class="brand">
+            <svg class="brand-icon" viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v6c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 11v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/></svg>
+            <span>Data Importer</span>
+        </div>
+        <nav class="stepper" aria-label="Steps">
+            <button type="button" class="step-pill" id="pill-1" onclick="showStep(1)">
+                <span class="step-num">1</span>
+                <span class="step-text"><strong>Prepare column names</strong><small>Internet ON</small></span>
+            </button>
+            <span class="step-line"></span>
+            <button type="button" class="step-pill" id="pill-2" onclick="showStep(2)">
+                <span class="step-num">2</span>
+                <span class="step-text"><strong>Import into database</strong><small>VPN ON</small></span>
+            </button>
+        </nav>
+        <button type="button" class="theme-btn" id="themeBtn" onclick="cycleTheme()">
+            <span class="theme-swatch" aria-hidden="true"></span>
+            <span id="themeName">Theme</span>
+        </button>
+    </div>
+</header>
+
+<div class="app-stopped hidden" id="appStopped">
+    The application has stopped (it closes itself when no browser tab is open). Start it again to continue.
+</div>
+
+<main class="container">
+
+    <!-- ============================== STEP 1 ============================== -->
+    <section id="step-1" class="step">
+        <div class="step-intro">
+            <h1>Step 1 · Prepare column names</h1>
+            <p>Keep the <strong>internet connected</strong> (do not connect the VPN yet). Gemini AI turns long column
+                names into short, readable ones. You get a mapping file to review before anything touches the database.</p>
+        </div>
+
+        <div class="banner" id="aiStatus">Checking AI status...</div>
+
+        <div class="card">
+            <div class="grid-2">
+                <div class="field">
+                    <label for="n-db">Database</label>
+                    <select id="n-db" onchange="onNamingDbChange()"></select>
+                </div>
+                <div class="field">
+                    <label for="n-version">Version
+                        <a href="#" class="help-link" onclick="openVersionHelp(); return false;">Not sure of the version?</a>
+                    </label>
+                    <select id="n-version" onchange="onNamingVersionChange()"></select>
+                </div>
+            </div>
+            <div class="limit-chip hidden" id="n-limit"></div>
+
+            <div class="field">
+                <label for="n-csv">Data CSV file</label>
+                <input type="text" id="n-csv" placeholder="C:/Users/you/Downloads/data.csv" autocomplete="off" spellcheck="false">
+                <small class="hint">In File Explorer, right-click the CSV file → <strong>Copy as path</strong>, then paste it here.</small>
+            </div>
+
+            <div class="actions">
+                <button type="button" class="btn btn-primary" id="n-start" onclick="startNaming()">
+                    <span class="spinner hidden" id="n-spinner"></span>
+                    Create column names
+                </button>
+            </div>
+        </div>
+
+        <div class="card log-card hidden" id="n-log-card">
+            <div class="card-head">
+                <h2>Progress</h2>
+            </div>
+            <div class="log" id="n-log"></div>
+        </div>
+
+        <div class="card hidden" id="n-result">
+            <div class="card-head">
+                <h2>Column names are ready</h2>
+            </div>
+            <div class="stats" id="n-stats"></div>
+
+            <div class="field">
+                <label>Mapping file (saved in your Downloads folder)</label>
+                <div class="input-row">
+                    <input type="text" id="n-mapping-path" readonly>
+                    <button type="button" class="btn btn-ghost" onclick="copyText('n-mapping-path', this)">Copy path</button>
+                    <a class="btn btn-ghost" id="n-download" href="#" download>Download</a>
+                </div>
+            </div>
+
+            <div class="next-steps">
+                <h3>Review the names here</h3>
+                <ol>
+                    <li>Rows marked <span class="flag">Review</span> could not be shortened by AI. Type a better name,
+                        click <strong>AI</strong> on the row, or send all of them to AI at once.</li>
+                    <li>Every name is checked while you type (length, allowed characters, reserved words,
+                        duplicates). Rows in red must be fixed before you can continue.</li>
+                    <li>Click <strong>Save changes</strong> (Continue saves too). The mapping file above is updated.</li>
+                    <li>Connect to your <strong>VPN</strong>, then click <strong>Continue</strong>.</li>
+                </ol>
+            </div>
+
+            <div class="validation-bar" id="n-validation"></div>
+
+            <div class="table-tools">
+                <div class="filters">
+                    <label class="toggle"><input type="checkbox" id="n-flagged-only" onchange="renderMappingTable()"> Only flagged</label>
+                    <label class="toggle"><input type="checkbox" id="n-errors-only" onchange="renderMappingTable()"> Only problems</label>
+                    <input type="search" id="n-filter" placeholder="Filter names..." oninput="renderMappingTable()">
+                </div>
+                <div class="filters">
+                    <button type="button" class="btn btn-secondary ai-btn" id="n-ai-all" onclick="aiRenameAll()">
+                        <span class="spinner hidden" id="n-ai-spinner"></span>
+                        ✨ <span id="n-ai-all-label">Rename flagged with AI</span>
+                    </button>
+                    <button type="button" class="btn btn-ghost" id="n-save" onclick="saveNames()" disabled>Save changes</button>
+                </div>
+            </div>
+            <div class="table-wrap">
+                <table class="data-table edit-table">
+                    <thead><tr><th>#</th><th>Raw column name</th><th>Column name in the table</th><th>Method</th><th></th></tr></thead>
+                    <tbody id="n-table"></tbody>
+                </table>
+            </div>
+
+            <div class="actions actions-end">
+                <span class="inline-result" id="n-continue-msg"></span>
+                <button type="button" class="btn btn-primary" id="n-continue" onclick="continueToImport()">Continue to step 2 →</button>
+            </div>
+        </div>
+
+        <p class="skip-note">You can also edit the mapping file in Excel instead - step 2 checks the names again.
+            Already have a reviewed mapping file? <a href="#" onclick="showStep(2); return false;">Go straight to step 2</a>.</p>
+    </section>
+
+    <!-- ============================== STEP 2 ============================== -->
+    <section id="step-2" class="step hidden">
+        <div class="step-intro">
+            <h1>Step 2 · Import into the database</h1>
+            <p>Connect to your <strong>VPN</strong> now. The internet is not needed any more - everything from here
+                talks only to your database.</p>
+        </div>
+
+        <div class="card">
+            <div class="card-head"><h2>Database connection</h2></div>
+            <div class="grid-2">
+                <div class="field">
+                    <label for="i-db">Database</label>
+                    <select id="i-db" onchange="onImportDbChange()"></select>
+                </div>
+                <div class="field">
+                    <label for="i-driver">Driver class</label>
+                    <input type="text" id="i-driver" readonly>
+                </div>
+            </div>
+            <div class="field">
+                <label for="i-url">JDBC URL</label>
+                <input type="text" id="i-url" autocomplete="off" spellcheck="false">
+                <small class="hint" id="i-url-hint"></small>
+            </div>
+            <div class="grid-2">
+                <div class="field">
+                    <label for="i-user">Username</label>
+                    <input type="text" id="i-user" autocomplete="off" spellcheck="false">
+                </div>
+                <div class="field">
+                    <label for="i-pass">Password</label>
+                    <div class="input-row">
+                        <input type="password" id="i-pass" autocomplete="off">
+                        <button type="button" class="btn btn-ghost" onclick="togglePassword(this)">Show</button>
+                    </div>
+                </div>
+            </div>
+            <div class="actions">
+                <button type="button" class="btn btn-secondary" id="i-test" onclick="testConnection()">
+                    <span class="spinner hidden" id="i-test-spinner"></span>
+                    Test connection
+                </button>
+                <span class="inline-result" id="i-test-result"></span>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-head"><h2>Files and table</h2></div>
+            <div class="field">
+                <label for="i-data">Data CSV file</label>
+                <input type="text" id="i-data" placeholder="C:/Users/you/Downloads/data.csv" autocomplete="off" spellcheck="false">
+            </div>
+            <div class="field">
+                <label for="i-mapping">Column mapping file (from step 1, reviewed)</label>
+                <input type="text" id="i-mapping" placeholder="C:/Users/you/Downloads/Data_Importer/data/column_mapping_data.csv" autocomplete="off" spellcheck="false">
+                <small class="hint">Right-click each file → <strong>Copy as path</strong>, then paste. Make sure the mapping file is saved and closed in Excel.</small>
+            </div>
+            <div class="field">
+                <label for="i-table">Table name</label>
+                <input type="text" id="i-table" placeholder="sales_data_2024" autocomplete="off" spellcheck="false">
+            </div>
+            <div class="actions">
+                <button type="button" class="btn btn-primary" id="i-start" onclick="startImport()">
+                    <span class="spinner hidden" id="i-spinner"></span>
+                    Import data
+                </button>
+                <a href="#" class="back-link" onclick="showStep(1); return false;">← Back to step 1</a>
+            </div>
+        </div>
+
+        <div class="card log-card hidden" id="i-log-card">
+            <div class="card-head"><h2>Progress</h2></div>
+            <div class="progress"><div class="progress-bar" id="i-progress"></div></div>
+            <div class="progress-label" id="i-progress-label"></div>
+            <div class="log" id="i-log"></div>
+        </div>
+
+        <div class="card success-card hidden" id="i-result"></div>
+    </section>
+</main>
+
+<!-- ============================== VERSION HELP ============================== -->
+<div class="modal hidden" id="helpModal" role="dialog" aria-modal="true" aria-labelledby="helpTitle">
+    <div class="modal-backdrop" onclick="closeModal('helpModal')"></div>
+    <div class="modal-panel modal-wide">
+        <div class="modal-head">
+            <div>
+                <h2 id="helpTitle">How to find your database version</h2>
+                <p>Run one query in the tool you normally use (SQL Developer, MySQL Workbench, pgAdmin, SSMS, DBeaver...), or ask your DBA.</p>
+            </div>
+            <button type="button" class="icon-btn" onclick="closeModal('helpModal')" aria-label="Close">✕</button>
+        </div>
+        <div class="tabs" id="helpTabs" role="tablist"></div>
+        <div class="modal-body" id="helpBody"></div>
+        <div class="modal-foot">
+            <h3>Maximum column name length at a glance</h3>
+            <table class="data-table compact">
+                <thead><tr><th>Database</th><th>Version</th><th>Column name limit</th></tr></thead>
+                <tbody>
+                    <tr><td>MySQL</td><td>5.7 to 9.7</td><td>64 characters</td></tr>
+                    <tr><td>Oracle</td><td>12.1 and earlier</td><td>30 bytes</td></tr>
+                    <tr><td>Oracle</td><td>12.2, 18c, 19c, 21c, 23ai and newer</td><td>128 bytes (if COMPATIBLE ≥ 12.2)</td></tr>
+                    <tr><td>PostgreSQL</td><td>All versions</td><td>63 bytes</td></tr>
+                    <tr><td>SQL Server</td><td>All versions</td><td>128 characters</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- ============================== TABLE EXISTS ============================== -->
+<div class="modal hidden" id="existsModal" role="dialog" aria-modal="true" aria-labelledby="existsTitle">
+    <div class="modal-backdrop"></div>
+    <div class="modal-panel">
+        <div class="modal-head">
+            <h2 id="existsTitle">Table already exists</h2>
+        </div>
+        <div class="modal-body">
+            <p>There is already a table or view named <strong id="existsName"></strong> in this database.</p>
+            <p>Replace it? <strong>All data in it will be deleted.</strong></p>
+        </div>
+        <div class="modal-actions">
+            <button type="button" class="btn btn-ghost" onclick="renameInstead()">No, I'll use another name</button>
+            <button type="button" class="btn btn-danger" onclick="replaceAndImport()">Yes, replace it</button>
+        </div>
+    </div>
+</div>
+
+<script src="/js/app.js"></script>
+</body>
+</html>
